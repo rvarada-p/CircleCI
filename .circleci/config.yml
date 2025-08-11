@@ -8,7 +8,6 @@ jobs:
     parameters:
       target_env:
         type: string
-      # optional: set explicit tag range; else auto: PREV_TAG=latest tag, CURR=HEAD
       from_tag:
         type: string
         default: ""
@@ -20,19 +19,17 @@ jobs:
     steps:
       - checkout
 
-      # Install prerequisites
+      # Install Salesforce CLI and sfdx-git-delta globally
       - run:
-          name: Install CLIs & tools
+          name: Install CLIs
           command: |
             sudo apt-get update -y
             sudo apt-get install -y git jq
-            sudo npm install -g @salesforce/cli
-            # sfdx-git-delta (node wrapper downloads the jar for you)
-            npm install --no-save sfdx-git-delta
-
+            sudo npm install -g @salesforce/cli sfdx-git-delta
             echo 'export PATH=$(npm bin -g):$PATH' >> "$BASH_ENV"
             source "$BASH_ENV"
             sf --version
+            sgd --version
 
       # Prepare JWT key from base64
       - run:
@@ -40,10 +37,9 @@ jobs:
           command: |
             echo "$JWT_KEY_B64" | base64 -d > server.key
             chmod 600 server.key
-            # sanity check: must be a valid private key
             openssl pkey -in server.key -noout >/dev/null
 
-      # Auth
+      # Auth to Salesforce
       - run:
           name: JWT Auth
           command: |
@@ -55,91 +51,73 @@ jobs:
               --instance-url "${SF_INSTANCEURL_<< parameters.target_env >>}" \
               --alias "ci-<< parameters.target_env >>" --set-default
 
-      # Figure out tag range
+      # Determine Git tag range
       - run:
           name: Resolve git range
           command: |
-            set -e
             git fetch --tags --force
             if [ -n "<< parameters.from_tag >>" ]; then
               FROM="<< parameters.from_tag >>"
             else
-              # latest tag before HEAD
               FROM=$(git describe --tags --abbrev=0 "$(git rev-list --tags --max-count=1)" 2>/dev/null || true)
             fi
             TO="<< parameters.to_tag >>"
             [ -z "$TO" ] && TO="HEAD"
 
             if [ -z "$FROM" ]; then
-              echo "No previous tag found. Using last commit as baseline."
+              echo "No previous tag found. Using last commit."
               FROM=$(git rev-list --max-count=1 HEAD^ || git rev-list --max-count=1 HEAD)
             fi
 
-            echo "FROM_REF=$FROM" | tee FROM_REF.env
-            echo "TO_REF=$TO"     | tee TO_REF.env
-      - run:
-          name: Export range to env
-          command: |
-            echo 'export FROM_REF='$(cut -d= -f2 FROM_REF.env) >> "$BASH_ENV"
-            echo 'export TO_REF='$(cut -d= -f2 TO_REF.env)     >> "$BASH_ENV"
+            echo "export FROM_REF=$FROM" >> "$BASH_ENV"
+            echo "export TO_REF=$TO" >> "$BASH_ENV"
             source "$BASH_ENV"
             echo "Using range: $FROM_REF -> $TO_REF"
-            
+
+      # Generate delta package.xml
       - run:
-          name: Install sfdx-git-delta (local)
-          command: npm install --no-save sfdx-git-delta
-      
-            
-      
-      - run:
-          name: Generate delta (package.xml + files)
+          name: Generate delta
           command: |
             source "$BASH_ENV"
             mkdir -p .sgd
-            ./node_modules/.bin/sgd --from "$FROM_REF" --to "$TO_REF" --repo "." --output ".sgd" --generate-delta
+            sgd --from "$FROM_REF" --to "$TO_REF" --repo "." --output ".sgd" --generate-delta
             if [ ! -f ".sgd/package/package.xml" ]; then
-              echo "No changes found. Skipping deploy."
-              echo "SKIP_DEPLOY=1" >> "$BASH_ENV"
+              echo "No changes found."
+              echo "export SKIP_DEPLOY=1" >> "$BASH_ENV"
             fi
 
-
-      # Build a smart test list (impacted + dependents heuristic)
+      # Build impacted test list
       - run:
           name: Build impacted test list
           command: |
             source "$BASH_ENV"
             if [ "$SKIP_DEPLOY" = "1" ]; then
-              echo "TESTS=" >> $BASH_ENV
+              echo "export TESTS=" >> "$BASH_ENV"
               exit 0
             fi
 
-            # Collect changed Apex classes from delta
             CHANGED_CLASSES=$(git diff --name-only "$FROM_REF" "$TO_REF" -- 'force-app/**/classes/*.cls' | xargs -I{} basename "{}" .cls | sort -u || true)
 
-            # Heuristic: find tests that reference changed classes by name in repo
             TESTS_SET=""
             if [ -n "$CHANGED_CLASSES" ]; then
               for c in $CHANGED_CLASSES; do
-                # common naming: *Test.cls OR references within a test file
                 CANDIDATES=$(git ls-files 'force-app/**/classes/*Test.cls' | xargs -I{} basename "{}" .cls | grep -i ".*Test$" || true)
-                # tests that mention the class name
                 REF_TESTS=$(git grep -li "$c" -- 'force-app/**/classes/*Test.cls' | xargs -I{} basename "{}" .cls | sed 's/\.cls$//' || true)
                 TESTS_SET="$TESTS_SET $CANDIDATES $REF_TESTS"
               done
             fi
 
-            # De-dup, flatten to comma-separated
             TESTS=$(echo $TESTS_SET | tr ' ' '\n' | sed '/^$/d' | sort -u | paste -sd, -)
             echo "Derived tests: ${TESTS:-<none>}"
-            echo "TESTS=$TESTS" >> "$BASH_ENV"
+            echo "export TESTS=$TESTS" >> "$BASH_ENV"
 
-      # Validate (checkonly); use tests if available, else NoTestRun
+      # Validate delta (checkonly)
       - run:
-          name: Validate delta (checkonly)
+          name: Validate delta
           command: |
             source "$BASH_ENV"
             if [ "$SKIP_DEPLOY" = "1" ]; then
-              echo "Skipping validation (no changes)."
+              echo "Skipping validation."
               exit 0
             fi
 
@@ -156,13 +134,13 @@ jobs:
                 --dry-run
             fi
 
-      # Deploy delta (real deploy)
+      # Deploy delta
       - run:
           name: Deploy delta
           command: |
             source "$BASH_ENV"
             if [ "$SKIP_DEPLOY" = "1" ]; then
-              echo "Skipping deploy (no changes)."
+              echo "Skipping deploy."
               exit 0
             fi
 
