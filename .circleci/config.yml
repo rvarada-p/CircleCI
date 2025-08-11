@@ -27,12 +27,11 @@ jobs:
       - run:
           name: Prepare JWT key
           command: |
-            if [ -n "$JWT_KEY_B64" ]; then
-              echo "$JWT_KEY_B64" | base64 -d > server.key
-            else
-              echo "$JWT_KEY" > server.key
-            fi
+            echo "$JWT_KEY_B64" | base64 -d > server.key
             chmod 600 server.key
+            # Optional: verify it’s a valid RSA private key without exposing it
+            openssl rsa -in server.key -check -noout
+
 
       - run:
           name: JWT Auth
