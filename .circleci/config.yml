@@ -35,13 +35,22 @@ workflows:
   deploy-dev:
     jobs:
       - deploy-to-env:
-          name: Deploy to Qa
+          name: Deploy to Dev
+          target_env: "DEV"
+          filters:
+            branches:
+              only: dev
+
+  deploy-qa:
+    jobs:
+      - deploy-to-env:
+          name: Deploy to QA
           target_env: "QA"
           filters:
             branches:
               only: qa
 
-  deploy-qa:
+  deploy-uat:
     jobs:
       - deploy-to-env:
           name: Deploy to UAT
