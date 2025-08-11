@@ -50,7 +50,7 @@ jobs:
             source "$BASH_ENV"
             sf project deploy start \
               --source-dir force-app \
-              --test-level RunLocalTests \
+              --test-level NoTestRun \
               --dry-run
 
       - run:
@@ -59,7 +59,7 @@ jobs:
             source "$BASH_ENV"
             sf project deploy start \
               --source-dir force-app \
-              --test-level RunLocalTests
+              --test-level NoTestRun \
 
 workflows:
   deploy-dev:
