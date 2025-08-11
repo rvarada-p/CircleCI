@@ -40,7 +40,7 @@ jobs:
             source "$BASH_ENV"
             sf org login jwt \
               --username "${SF_USERNAME_<< parameters.target_env >>}" \
-              --key-file server.key \
+              --jwt-key-file server.key \
               --client-id "${SF_CONSUMER_KEY_<< parameters.target_env >>}" \
               --instance-url "${SF_INSTANCEURL_<< parameters.target_env >>}" \
               --alias "ci-<< parameters.target_env >>" --set-default
