@@ -12,22 +12,45 @@ jobs:
       - image: cimg/node:18.17
     steps:
       - checkout
+
+      # Install Salesforce CLI (standalone)
       - run:
           name: Install Salesforce CLI
-          command: npm install sfdx-cli
+          command: |
+            curl -sL https://developer.salesforce.com/media/salesforce-cli/sfdx-linux-x64.tar.xz | tar -xJ
+            ./sfdx/install
+            echo 'export PATH="$(ls -d $PWD/sfdx/*/bin):$PATH"' >> "$BASH_ENV"
+            source "$BASH_ENV"
+            sfdx --version
+            sfdx plugins --core
+
+      # (Optional but safer) If your JWT key is stored base64 in env var JWT_KEY_B64
+      # decode it to avoid newline/format issues. Otherwise keep your original echo.
+      - run:
+          name: Prepare JWT key
+          command: |
+            if [ -n "$JWT_KEY_B64" ]; then
+              echo "$JWT_KEY_B64" | base64 -d > server.key
+            else
+              echo "$JWT_KEY" > server.key
+            fi
+            chmod 600 server.key
+            ls -l server.key
+
       - run:
           name: JWT Auth
           command: |
-            echo "$JWT_KEY" > server.key
-            chmod 600 server.key
+            source "$BASH_ENV"
             sfdx auth:jwt:grant \
               --username "${SF_USERNAME_<< parameters.target_env >>}" \
-              --jwtkeyfile server.key \
-              --clientid "${SF_CONSUMER_KEY_<< parameters.target_env >>}" \
-              --instanceurl "${SF_INSTANCEURL_<< parameters.target_env >>}"
+              --jwt-key-file server.key \
+              --client-id "${SF_CONSUMER_KEY_<< parameters.target_env >>}" \
+              --instance-url "${SF_INSTANCEURL_<< parameters.target_env >>}"
+
       - run:
           name: Deploy to Salesforce
           command: |
+            source "$BASH_ENV"
             sfdx force:source:deploy -p force-app --checkonly
             sfdx force:source:deploy -p force-app --testlevel RunLocalTests
 
