@@ -10,7 +10,7 @@ public with sharing class AuraActionResponse {
     public Map<Object, Object> values { get; set; }
 
     /**
-     * Default constructor when operation was successful without return data
+     * Default construdddctor when operation was successful without return data
      */
     public AuraActionResponse() {
        //
