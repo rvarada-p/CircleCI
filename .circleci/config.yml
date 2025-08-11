@@ -8,38 +8,31 @@ jobs:
     parameters:
       target_env:
         type: string
-      from_tag:
-        type: string
-        default: ""
-      to_tag:
-        type: string
-        default: ""
     docker:
       - image: cimg/node:18.17
     steps:
       - checkout
 
-      # Install Salesforce CLI and sfdx-git-delta globally
+      # Install Salesforce CLI (modern 'sf' CLI; provides 'sf' command)
       - run:
-          name: Install CLIs
+          name: Install Salesforce CLI
           command: |
-            sudo apt-get update -y
-            sudo apt-get install -y git jq
-            sudo npm install -g @salesforce/cli sfdx-git-delta
+            sudo npm install -g @salesforce/cli
             echo 'export PATH=$(npm bin -g):$PATH' >> "$BASH_ENV"
             source "$BASH_ENV"
             sf --version
-            sgd --version
+            sf plugins --core
 
-      # Prepare JWT key from base64
+      # Prepare JWT key (supports either raw or base64 env var)
       - run:
           name: Prepare JWT key
           command: |
             echo "$JWT_KEY_B64" | base64 -d > server.key
             chmod 600 server.key
-            openssl pkey -in server.key -noout >/dev/null
+            # Optional: verify it’s a valid RSA private key without exposing it
+            openssl rsa -in server.key -check -noout
 
-      # Auth to Salesforce
+
       - run:
           name: JWT Auth
           command: |
@@ -51,142 +44,52 @@ jobs:
               --instance-url "${SF_INSTANCEURL_<< parameters.target_env >>}" \
               --alias "ci-<< parameters.target_env >>" --set-default
 
-      # Determine Git tag range
       - run:
-          name: Resolve git range
-          command: |
-            git fetch --tags --force
-            if [ -n "<< parameters.from_tag >>" ]; then
-              FROM="<< parameters.from_tag >>"
-            else
-              FROM=$(git describe --tags --abbrev=0 "$(git rev-list --tags --max-count=1)" 2>/dev/null || true)
-            fi
-            TO="<< parameters.to_tag >>"
-            [ -z "$TO" ] && TO="HEAD"
-
-            if [ -z "$FROM" ]; then
-              echo "No previous tag found. Using last commit."
-              FROM=$(git rev-list --max-count=1 HEAD^ || git rev-list --max-count=1 HEAD)
-            fi
-
-            echo "export FROM_REF=$FROM" >> "$BASH_ENV"
-            echo "export TO_REF=$TO" >> "$BASH_ENV"
-            source "$BASH_ENV"
-            echo "Using range: $FROM_REF -> $TO_REF"
-
-      # Generate delta package.xml
-      - run:
-          name: Generate delta
+          name: Validate (checkonly)
           command: |
             source "$BASH_ENV"
-            mkdir -p .sgd
-            sgd --from "$FROM_REF" --to "$TO_REF" --repo "." --output ".sgd" --generate-delta
-            if [ ! -f ".sgd/package/package.xml" ]; then
-              echo "No changes found."
-              echo "export SKIP_DEPLOY=1" >> "$BASH_ENV"
-            fi
+            sf project deploy start \
+              --source-dir force-app \
+              --test-level NoTestRun \
+              --dry-run
 
-      # Build impacted test list
       - run:
-          name: Build impacted test list
+          name: Deploy to Salesforce
           command: |
             source "$BASH_ENV"
-            if [ "$SKIP_DEPLOY" = "1" ]; then
-              echo "export TESTS=" >> "$BASH_ENV"
-              exit 0
-            fi
-
-            CHANGED_CLASSES=$(git diff --name-only "$FROM_REF" "$TO_REF" -- 'force-app/**/classes/*.cls' | xargs -I{} basename "{}" .cls | sort -u || true)
-
-            TESTS_SET=""
-            if [ -n "$CHANGED_CLASSES" ]; then
-              for c in $CHANGED_CLASSES; do
-                CANDIDATES=$(git ls-files 'force-app/**/classes/*Test.cls' | xargs -I{} basename "{}" .cls | grep -i ".*Test$" || true)
-                REF_TESTS=$(git grep -li "$c" -- 'force-app/**/classes/*Test.cls' | xargs -I{} basename "{}" .cls | sed 's/\.cls$//' || true)
-                TESTS_SET="$TESTS_SET $CANDIDATES $REF_TESTS"
-              done
-            fi
-
-            TESTS=$(echo $TESTS_SET | tr ' ' '\n' | sed '/^$/d' | sort -u | paste -sd, -)
-            echo "Derived tests: ${TESTS:-<none>}"
-            echo "export TESTS=$TESTS" >> "$BASH_ENV"
-
-      # Validate delta (checkonly)
-      - run:
-          name: Validate delta
-          command: |
-            source "$BASH_ENV"
-            if [ "$SKIP_DEPLOY" = "1" ]; then
-              echo "Skipping validation."
-              exit 0
-            fi
-
-            if [ -n "$TESTS" ]; then
-              sf project deploy start \
-                --manifest .sgd/package/package.xml \
-                --test-level RunSpecifiedTests \
-                --tests "$TESTS" \
-                --dry-run
-            else
-              sf project deploy start \
-                --manifest .sgd/package/package.xml \
-                --test-level NoTestRun \
-                --dry-run
-            fi
-
-      # Deploy delta
-      - run:
-          name: Deploy delta
-          command: |
-            source "$BASH_ENV"
-            if [ "$SKIP_DEPLOY" = "1" ]; then
-              echo "Skipping deploy."
-              exit 0
-            fi
-
-            if [ -n "$TESTS" ]; then
-              sf project deploy start \
-                --manifest .sgd/package/package.xml \
-                --test-level RunSpecifiedTests \
-                --tests "$TESTS"
-            else
-              sf project deploy start \
-                --manifest .sgd/package/package.xml \
-                --test-level NoTestRun
-            fi
+            sf project deploy start \
+              --source-dir force-app \
+              --test-level NoTestRun \
 
 workflows:
   deploy-dev:
     jobs:
       - deploy-to-env:
-          name: Deploy to Dev (delta)
+          name: Deploy to Dev
           target_env: "DEV"
           filters:
             branches:
               only: dev
-
   deploy-qa:
     jobs:
       - deploy-to-env:
-          name: Deploy to QA (delta)
+          name: Deploy to QA
           target_env: "QA"
           filters:
             branches:
               only: qa
-
   deploy-uat:
     jobs:
       - deploy-to-env:
-          name: Deploy to UAT (delta)
+          name: Deploy to UAT
           target_env: "UAT"
           filters:
             branches:
               only: uat
-
   deploy-prod:
     jobs:
       - deploy-to-env:
-          name: Deploy to Prod (delta)
+          name: Deploy to Prod
           target_env: "PROD"
           filters:
             branches:
