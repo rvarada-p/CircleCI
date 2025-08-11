@@ -12,24 +12,54 @@ jobs:
       - image: cimg/node:18.17
     steps:
       - checkout
+
+      # Install Salesforce CLI (modern 'sf' CLI; provides 'sf' command)
       - run:
           name: Install Salesforce CLI
-          command: npm install sfdx-cli
+          command: |
+            sudo npm install -g @salesforce/cli
+            echo 'export PATH=$(npm bin -g):$PATH' >> "$BASH_ENV"
+            source "$BASH_ENV"
+            sf --version
+            sf plugins --core
+
+      # Prepare JWT key (supports either raw or base64 env var)
+      - run:
+          name: Prepare JWT key
+          command: |
+            echo "$JWT_KEY_B64" | base64 -d > server.key
+            chmod 600 server.key
+            # Optional: verify it’s a valid RSA private key without exposing it
+            openssl rsa -in server.key -check -noout
+
+
       - run:
           name: JWT Auth
           command: |
-            echo "$JWT_KEY" > server.key
-            chmod 600 server.key
-            sfdx auth:jwt:grant \
+            source "$BASH_ENV"
+            sf org login jwt \
               --username "${SF_USERNAME_<< parameters.target_env >>}" \
-              --jwtkeyfile server.key \
-              --clientid "${SF_CONSUMER_KEY_<< parameters.target_env >>}" \
-              --instanceurl "${SF_INSTANCEURL_<< parameters.target_env >>}"
+              --jwt-key-file server.key \
+              --client-id "${SF_CONSUMER_KEY_<< parameters.target_env >>}" \
+              --instance-url "${SF_INSTANCEURL_<< parameters.target_env >>}" \
+              --alias "ci-<< parameters.target_env >>" --set-default
+
+      - run:
+          name: Validate (checkonly)
+          command: |
+            source "$BASH_ENV"
+            sf project deploy start \
+              --source-dir force-app \
+              --test-level NoTestRun \
+              --dry-run
+
       - run:
           name: Deploy to Salesforce
           command: |
-            sfdx force:source:deploy -p force-app --checkonly
-            sfdx force:source:deploy -p force-app --testlevel RunLocalTests
+            source "$BASH_ENV"
+            sf project deploy start \
+              --source-dir force-app \
+              --test-level NoTestRun \
 
 workflows:
   deploy-dev:
@@ -40,7 +70,6 @@ workflows:
           filters:
             branches:
               only: dev
-
   deploy-qa:
     jobs:
       - deploy-to-env:
@@ -49,7 +78,6 @@ workflows:
           filters:
             branches:
               only: qa
-
   deploy-uat:
     jobs:
       - deploy-to-env:
@@ -58,7 +86,6 @@ workflows:
           filters:
             branches:
               only: uat
-
   deploy-prod:
     jobs:
       - deploy-to-env:
