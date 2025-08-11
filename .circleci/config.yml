@@ -84,19 +84,24 @@ jobs:
             echo 'export TO_REF='$(cut -d= -f2 TO_REF.env)     >> "$BASH_ENV"
             source "$BASH_ENV"
             echo "Using range: $FROM_REF -> $TO_REF"
-
-      # Build delta with sfdx-git-delta
+            
+      - run:
+          name: Install sfdx-git-delta (local)
+          command: npm install --no-save sfdx-git-delta
+      
+            
+      
       - run:
           name: Generate delta (package.xml + files)
           command: |
             source "$BASH_ENV"
             mkdir -p .sgd
-            npx --yes sfdx-git-delta --from "$FROM_REF" --to "$TO_REF" --repo "." --output ".sgd" --generate-delta
+            ./node_modules/.bin/sgd --from "$FROM_REF" --to "$TO_REF" --repo "." --output ".sgd" --generate-delta
             if [ ! -f ".sgd/package/package.xml" ]; then
-              echo "No package.xml generated. Nothing to deploy."
-              echo "SKIP_DEPLOY=1" >> $BASH_ENV
+              echo "No changes found. Skipping deploy."
+              echo "SKIP_DEPLOY=1" >> "$BASH_ENV"
             fi
-            source "$BASH_ENV"
+
 
       # Build a smart test list (impacted + dependents heuristic)
       - run:
