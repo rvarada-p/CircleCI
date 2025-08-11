@@ -8,31 +8,42 @@ jobs:
     parameters:
       target_env:
         type: string
+      # optional: set explicit tag range; else auto: PREV_TAG=latest tag, CURR=HEAD
+      from_tag:
+        type: string
+        default: ""
+      to_tag:
+        type: string
+        default: ""
     docker:
       - image: cimg/node:18.17
     steps:
       - checkout
 
-      # Install Salesforce CLI (modern 'sf' CLI; provides 'sf' command)
+      # Install prerequisites
       - run:
-          name: Install Salesforce CLI
+          name: Install CLIs & tools
           command: |
+            sudo apt-get update -y
+            sudo apt-get install -y git jq
             sudo npm install -g @salesforce/cli
+            # sfdx-git-delta (node wrapper downloads the jar for you)
+            npm install --no-save sfdx-git-delta
+
             echo 'export PATH=$(npm bin -g):$PATH' >> "$BASH_ENV"
             source "$BASH_ENV"
             sf --version
-            sf plugins --core
 
-      # Prepare JWT key (supports either raw or base64 env var)
+      # Prepare JWT key from base64
       - run:
           name: Prepare JWT key
           command: |
             echo "$JWT_KEY_B64" | base64 -d > server.key
             chmod 600 server.key
-            # Optional: verify it’s a valid RSA private key without exposing it
-            openssl rsa -in server.key -check -noout
+            # sanity check: must be a valid private key
+            openssl pkey -in server.key -noout >/dev/null
 
-
+      # Auth
       - run:
           name: JWT Auth
           command: |
@@ -44,52 +55,155 @@ jobs:
               --instance-url "${SF_INSTANCEURL_<< parameters.target_env >>}" \
               --alias "ci-<< parameters.target_env >>" --set-default
 
+      # Figure out tag range
       - run:
-          name: Validate (checkonly)
+          name: Resolve git range
           command: |
-            source "$BASH_ENV"
-            sf project deploy start \
-              --source-dir force-app \
-              --test-level NoTestRun \
-              --dry-run
+            set -e
+            git fetch --tags --force
+            if [ -n "<< parameters.from_tag >>" ]; then
+              FROM="<< parameters.from_tag >>"
+            else
+              # latest tag before HEAD
+              FROM=$(git describe --tags --abbrev=0 "$(git rev-list --tags --max-count=1)" 2>/dev/null || true)
+            fi
+            TO="<< parameters.to_tag >>"
+            [ -z "$TO" ] && TO="HEAD"
 
+            if [ -z "$FROM" ]; then
+              echo "No previous tag found. Using last commit as baseline."
+              FROM=$(git rev-list --max-count=1 HEAD^ || git rev-list --max-count=1 HEAD)
+            fi
+
+            echo "FROM_REF=$FROM" | tee FROM_REF.env
+            echo "TO_REF=$TO"     | tee TO_REF.env
       - run:
-          name: Deploy to Salesforce
+          name: Export range to env
+          command: |
+            echo 'export FROM_REF='$(cut -d= -f2 FROM_REF.env) >> "$BASH_ENV"
+            echo 'export TO_REF='$(cut -d= -f2 TO_REF.env)     >> "$BASH_ENV"
+            source "$BASH_ENV"
+            echo "Using range: $FROM_REF -> $TO_REF"
+
+      # Build delta with sfdx-git-delta
+      - run:
+          name: Generate delta (package.xml + files)
           command: |
             source "$BASH_ENV"
-            sf project deploy start \
-              --source-dir force-app \
-              --test-level NoTestRun \
+            mkdir -p .sgd
+            npx --yes sfdx-git-delta --from "$FROM_REF" --to "$TO_REF" --repo "." --output ".sgd" --generate-delta
+            if [ ! -f ".sgd/package/package.xml" ]; then
+              echo "No package.xml generated. Nothing to deploy."
+              echo "SKIP_DEPLOY=1" >> $BASH_ENV
+            fi
+            source "$BASH_ENV"
+
+      # Build a smart test list (impacted + dependents heuristic)
+      - run:
+          name: Build impacted test list
+          command: |
+            source "$BASH_ENV"
+            if [ "$SKIP_DEPLOY" = "1" ]; then
+              echo "TESTS=" >> $BASH_ENV
+              exit 0
+            fi
+
+            # Collect changed Apex classes from delta
+            CHANGED_CLASSES=$(git diff --name-only "$FROM_REF" "$TO_REF" -- 'force-app/**/classes/*.cls' | xargs -I{} basename "{}" .cls | sort -u || true)
+
+            # Heuristic: find tests that reference changed classes by name in repo
+            TESTS_SET=""
+            if [ -n "$CHANGED_CLASSES" ]; then
+              for c in $CHANGED_CLASSES; do
+                # common naming: *Test.cls OR references within a test file
+                CANDIDATES=$(git ls-files 'force-app/**/classes/*Test.cls' | xargs -I{} basename "{}" .cls | grep -i ".*Test$" || true)
+                # tests that mention the class name
+                REF_TESTS=$(git grep -li "$c" -- 'force-app/**/classes/*Test.cls' | xargs -I{} basename "{}" .cls | sed 's/\.cls$//' || true)
+                TESTS_SET="$TESTS_SET $CANDIDATES $REF_TESTS"
+              done
+            fi
+
+            # De-dup, flatten to comma-separated
+            TESTS=$(echo $TESTS_SET | tr ' ' '\n' | sed '/^$/d' | sort -u | paste -sd, -)
+            echo "Derived tests: ${TESTS:-<none>}"
+            echo "TESTS=$TESTS" >> "$BASH_ENV"
+
+      # Validate (checkonly); use tests if available, else NoTestRun
+      - run:
+          name: Validate delta (checkonly)
+          command: |
+            source "$BASH_ENV"
+            if [ "$SKIP_DEPLOY" = "1" ]; then
+              echo "Skipping validation (no changes)."
+              exit 0
+            fi
+
+            if [ -n "$TESTS" ]; then
+              sf project deploy start \
+                --manifest .sgd/package/package.xml \
+                --test-level RunSpecifiedTests \
+                --tests "$TESTS" \
+                --dry-run
+            else
+              sf project deploy start \
+                --manifest .sgd/package/package.xml \
+                --test-level NoTestRun \
+                --dry-run
+            fi
+
+      # Deploy delta (real deploy)
+      - run:
+          name: Deploy delta
+          command: |
+            source "$BASH_ENV"
+            if [ "$SKIP_DEPLOY" = "1" ]; then
+              echo "Skipping deploy (no changes)."
+              exit 0
+            fi
+
+            if [ -n "$TESTS" ]; then
+              sf project deploy start \
+                --manifest .sgd/package/package.xml \
+                --test-level RunSpecifiedTests \
+                --tests "$TESTS"
+            else
+              sf project deploy start \
+                --manifest .sgd/package/package.xml \
+                --test-level NoTestRun
+            fi
 
 workflows:
   deploy-dev:
     jobs:
       - deploy-to-env:
-          name: Deploy to Dev
+          name: Deploy to Dev (delta)
           target_env: "DEV"
           filters:
             branches:
               only: dev
+
   deploy-qa:
     jobs:
       - deploy-to-env:
-          name: Deploy to QA
+          name: Deploy to QA (delta)
           target_env: "QA"
           filters:
             branches:
               only: qa
+
   deploy-uat:
     jobs:
       - deploy-to-env:
-          name: Deploy to UAT
+          name: Deploy to UAT (delta)
           target_env: "UAT"
           filters:
             branches:
               only: uat
+
   deploy-prod:
     jobs:
       - deploy-to-env:
-          name: Deploy to Prod
+          name: Deploy to Prod (delta)
           target_env: "PROD"
           filters:
             branches:
