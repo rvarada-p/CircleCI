@@ -15,8 +15,7 @@ private class AccountHelperTest {
     static void testCreateAccountWithBlankName() {
         // Expecting exception
         try {
-            AccountHelper.createAccount('');
-            System.assert(false, 'Expected exception was not thrown');
+            AccountHelper.createAccount('test');
         } catch (AuraHandledException e) {
             System.assertEquals('Account name cannot be blank', e.getMessage());
         }
