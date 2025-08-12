@@ -8,13 +8,12 @@ public with sharing class AccountHelper {
      */
     public static Id createAccount(String accountName) {
         if (String.isBlank(accountName)) {
-            throw new AuraHandledException('Account name cannot be blank');
+            throw new IllegalArgumentException('Account name cannot be blank');
         }
-
-        Account acc = new Account(
-            Name = accountName
-        );
+    
+        Account acc = new Account(Name = accountName);
         insert acc;
         return acc.Id;
     }
+    
 }
