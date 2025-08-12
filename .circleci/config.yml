@@ -29,9 +29,7 @@ jobs:
           command: |
             echo "$JWT_KEY_B64" | base64 -d > server.key
             chmod 600 server.key
-            # Optional: verify it’s a valid RSA private key without exposing it
             openssl rsa -in server.key -check -noout
-
 
       - run:
           name: JWT Auth
@@ -48,28 +46,30 @@ jobs:
           name: Validate (checkonly)
           command: |
             source "$BASH_ENV"
+            if [ "<< parameters.target_env >>" = "PROD" ]; then
+              TEST_LEVEL="RunAllTestsInOrg"
+            else
+              TEST_LEVEL="NoTestRun"
+            fi
             sf project deploy start \
               --source-dir force-app \
-              --test-level NoTestRun \
+              --test-level $TEST_LEVEL \
               --dry-run
 
       - run:
           name: Deploy to Salesforce
           command: |
             source "$BASH_ENV"
+            if [ "<< parameters.target_env >>" = "PROD" ]; then
+              TEST_LEVEL="RunAllTestsInOrg"
+            else
+              TEST_LEVEL="NoTestRun"
+            fi
             sf project deploy start \
               --source-dir force-app \
-              --test-level NoTestRun \
+              --test-level $TEST_LEVEL
 
 workflows:
-  # deploy-dev:
-  #   jobs:
-  #     - deploy-to-env:
-  #         name: Deploy to Dev
-  #         target_env: "DEV"
-  #         filters:
-  #           branches:
-  #             only: dev
   deploy-qa:
     jobs:
       - deploy-to-env:
@@ -78,6 +78,7 @@ workflows:
           filters:
             branches:
               only: qa
+
   deploy-uat:
     jobs:
       - deploy-to-env:
@@ -86,6 +87,7 @@ workflows:
           filters:
             branches:
               only: uat
+
   deploy-prod:
     jobs:
       - deploy-to-env:
