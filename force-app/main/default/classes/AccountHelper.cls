@@ -7,9 +7,6 @@ public with sharing class AccountHelper {
      * @return The Id of the newly created Account.
      */
     public static Id createAccount(String accountName) {
-        if (String.isBlank(accountName)) {
-            throw new IllegalArgumentException('Account name cannot be blank');
-        }
     
         Account acc = new Account(Name = accountName);
         insert acc;
