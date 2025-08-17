@@ -23,69 +23,58 @@ jobs:
             sf --version
             sf plugins --core
 
-      # 🔹 Git Tag Logic: Find the latest tag
-      - run:
-          name: Find Most Recent Tag
-          command: |
-            currentRef=0
-            for tag in $(git describe --tags --match='PROD-[0-9]*' --abbrev=0 --always); do
-              refNum=$(echo $tag | cut -d '-' -f 2)
-              if test $refNum -gt $currentRef; then
-                currentRef=$refNum
-                currentTag=$tag
-              fi
-            done
-            echo "Latest Tag: $currentTag"
-            echo "export CURRENT_REF=$currentRef" >> $BASH_ENV
-            echo "export CURRENT_TAG=$currentTag" >> $BASH_ENV
 
-      # 🔹 Build Manifest from changes since last tag
       - run:
-          name: Build the Package Manifest
+          name: Install Java (required for PMD)
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y openjdk-17-jdk
+            java -version
+            export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+            echo "export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $BASH_ENV
+
+      - run:
+          name: Install Salesforce Code Analyzer
           command: |
             source "$BASH_ENV"
-            cd force-app
+            sf plugins install @salesforce/sfdx-scanner
+            # verify plugin is installed
+            sf plugins
       
-            # Determine diff range
-            if git rev-parse "$CURRENT_TAG" >/dev/null 2>&1; then
-              echo "Found previous tag: $CURRENT_TAG"
-              FILES=$(git diff --name-only $CURRENT_TAG HEAD)
-            else
-              echo "No previous tag found. Using initial commit."
-              FILES=$(git diff --name-only $(git rev-list --max-parents=0 HEAD) HEAD)
-            fi
-      
-            echo "Changed files:"
-            echo "$FILES"
-      
-            if test -n "$FILES"; then
-              # Pass full paths (no cut -b …) so sf can resolve them
-              sf project generate manifest -p $FILES
-            else
-              echo "✅ No new commits to deploy. Skipping deployment."
-              exit 0
-            fi
-  
-      # 🔹 Deploy changes only if package.xml exists
       - run:
-          name: Push Source
-          command: |
-            if test -f package.xml; then
-              sf project deploy start -w 360 -x package.xml -l RunLocalTests -o ${SF_USERNAME_<< parameters.target_env >>}
-            else
-              echo "No Package Found!"
-              exit 1
-            fi
-
-      # 🔹 Tag new deployment
-      - run:
-          name: Set New Tag
+          name: Run Code Quality Check
           command: |
             source "$BASH_ENV"
-            git config user.email "ci-bot@example.com"
-            git config user.name "CI Bot"
-            git tag "PROD-$(( CURRENT_REF + 1 ))"
-            git push origin "PROD-$(( CURRENT_REF + 1 ))"
+            sf scanner run \
+              --target "force-app" \
+              --format table \
+              --engine pmd,eslint \
+              --normalize-severity
+        
+      # Prepare JWT key (supports either raw or base64 env var)
+      - run:
+          name: Prepare JWT key
+          command: |
+            echo "$JWT_KEY_B64" | base64 -d > server.key
+            chmod 600 server.key
+            openssl rsa -in server.key -check -noout
+
+      - run:
+          name: JWT Auth
+          command: |
+            source "$BASH_ENV"
+            sf org login jwt \
+              --username "${SF_USERNAME_<< parameters.target_env >>}" \
+              --jwt-key-file server.key \
+              --client-id "${SF_CONSUMER_KEY_<< parameters.target_env >>}" \
+              --instance-url "${SF_INSTANCEURL_<< parameters.target_env >>}"
+
+      - run:
+          name: Deploy to Salesforce
+          command: |
+            source "$BASH_ENV"
+            sf project deploy start --target-org "${SF_USERNAME_<< parameters.target_env >>}"
+
 
 workflows:
   deploy-qa:
@@ -96,6 +85,7 @@ workflows:
           filters:
             branches:
               only: qa
+
   deploy-uat:
     jobs:
       - deploy-to-env:
@@ -104,6 +94,7 @@ workflows:
           filters:
             branches:
               only: uat
+
   deploy-prod:
     jobs:
       - deploy-to-env:
