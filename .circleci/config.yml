@@ -29,19 +29,18 @@ jobs:
             source "$BASH_ENV"
             sf plugins install @salesforce/sfdx-scanner
             # verify plugin is installed
-            sf plugins list | grep scanner
-
-
-      # Run Code Analyzer
-      - run:
-          name: Run Code Quality Check
-          command: |
-            source "$BASH_ENV"
-            sf scanner run \
-              --target "force-app" \
-              --format table \
-              --engine pmd,eslint \
-              --normalize-severity
+            sf plugins
+      
+        - run:
+            name: Run Code Quality Check
+            command: |
+              source "$BASH_ENV"
+              sf scanner run \
+                --target "force-app" \
+                --format table \
+                --engine pmd,eslint \
+                --normalize-severity
+        
 
 
       # Prepare JWT key (supports either raw or base64 env var)
