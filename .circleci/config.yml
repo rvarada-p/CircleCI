@@ -50,47 +50,63 @@ jobs:
               --alias targetOrg \
               --set-default
 
-
-      # Find the Most Recent Tag for the given env
-      - run:
-          name: Find Most Recent Tag
-          command: |
-            prefix="INT${CIRCLE_JOB^^}-${CIRCLE_BRANCH^^}"
-            # Default per env (QA/UAT/PROD)
-            if [ "<< parameters.target_env >>" = "QA" ]; then
-              prefix="INTQA"
-            elif [ "<< parameters.target_env >>" = "UAT" ]; then
-              prefix="INTUAT"
-            elif [ "<< parameters.target_env >>" = "PROD" ]; then
-              prefix="INTPROD"
-            fi
-
-            currentRef=0
-            for tag in $(git describe --tags --match="${prefix}-[0-9]*"); do
-              refNum=$(echo $tag | cut -d '-' -f 2)
-              if test $refNum -gt $currentRef; then
-                  currentRef=$refNum
-                  currentTag=$tag
+        
+              # Find the Most Recent Tag for the given env
+        - run:
+            name: Find Most Recent Tag
+            command: |
+              # Set prefix per environment
+              if [ "<< parameters.target_env >>" = "QA" ]; then
+                prefix="INTQA"
+              elif [ "<< parameters.target_env >>" = "UAT" ]; then
+                prefix="INTUAT"
+              elif [ "<< parameters.target_env >>" = "PROD" ]; then
+                prefix="INTPROD"
               fi
-            done
+        
+              currentRef=0
+              currentTag=""
+        
+              for tag in $(git tag -l "${prefix}-[0-9]*"); do
+                refNum=$(echo $tag | cut -d '-' -f 2)
+                if test $refNum -gt $currentRef; then
+                    currentRef=$refNum
+                    currentTag=$tag
+                fi
+              done
+        
+              echo "TAG_PREFIX=$prefix" >> $BASH_ENV
+              echo "CURRENT_REF=$currentRef" >> $BASH_ENV
+              echo "CURRENT_TAG=$currentTag" >> $BASH_ENV
+              source $BASH_ENV
+        
+              if [ -z "$currentTag" ]; then
+                echo "No existing tag found for $prefix — first deployment!"
+              else
+                echo "Latest tag for $prefix: $currentTag ($currentRef)"
+              fi
+        
+        - run:
+            name: Build the Package Manifest
+            command: |
+              source $BASH_ENV
+              oldIFS="$IFS"
+              IFS=$'\n'
+        
+              if [ -z "$CURRENT_TAG" ]; then
+                # First deployment, include everything
+                FILES=$(git ls-files force-app)
+              else
+                FILES=$(git diff --name-only $CURRENT_TAG HEAD | cut -b 9-)
+              fi
+        
+              if test -n "$FILES"; then
+                  sf project generate manifest -p $FILES
+              else 
+                  echo "There are no new commits to deploy to ${TAG_PREFIX}."
+                  exit 1
+              fi
 
-            echo "TAG_PREFIX=$prefix" >> $BASH_ENV
-            echo "CURRENT_REF=$currentRef" >> $BASH_ENV
-            source $BASH_ENV
-            echo "Latest tag for $prefix: $currentTag ($currentRef)"
-
-      - run:
-          name: Build the Package Manifest
-          command: |
-            oldIFS="$IFS"
-            IFS=$'\n'
-            FILES=$(git diff --name-only ${TAG_PREFIX}-${CURRENT_REF} HEAD | cut -b 9-)
-            if test -n "$FILES"; then
-                sf project generate manifest -p $FILES
-            else 
-                echo "There are no new commits to deploy to ${TAG_PREFIX}."
-                exit 1
-            fi
 
 
       # Deploy using package.xml
