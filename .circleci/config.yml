@@ -79,12 +79,9 @@ jobs:
             source $BASH_ENV
             echo "Latest tag for $prefix: $currentTag ($currentRef)"
 
-      # Build the Package Manifest
       - run:
           name: Build the Package Manifest
           command: |
-            source $BASH_ENV
-            cd Bedrock/Bedrock
             oldIFS="$IFS"
             IFS=$'\n'
             FILES=$(git diff --name-only ${TAG_PREFIX}-${CURRENT_REF} HEAD | cut -b 9-)
@@ -94,6 +91,7 @@ jobs:
                 echo "There are no new commits to deploy to ${TAG_PREFIX}."
                 exit 1
             fi
+
 
       # Deploy using package.xml
       - run:
