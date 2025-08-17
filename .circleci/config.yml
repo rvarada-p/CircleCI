@@ -15,8 +15,11 @@ jobs:
 
       # Install NPM
       - run:
-          name: Install NPM
-          command: npm install -g latest
+          name: Install NPM latest
+          command: |
+            npm install latest
+            export PATH=$(pwd)/node_modules/.bin:$PATH
+
 
       # Install Salesforce CLI
       - run:
