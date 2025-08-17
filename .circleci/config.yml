@@ -23,25 +23,26 @@ jobs:
             sf --version
             sf plugins --core
 
-      # Install Salesforce Code Analyzer plugin
       - run:
           name: Install Salesforce Code Analyzer
           command: |
             source "$BASH_ENV"
             sf plugins install @salesforce/sfdx-scanner
-            sf scanner --version
+            # verify plugin is installed
+            sf plugins list | grep scanner
+
 
       # Run Code Analyzer
       - run:
           name: Run Code Quality Check
           command: |
             source "$BASH_ENV"
-            # Analyze entire force-app directory
             sf scanner run \
               --target "force-app" \
               --format table \
               --engine pmd,eslint \
               --normalize-severity
+
 
       # Prepare JWT key (supports either raw or base64 env var)
       - run:
