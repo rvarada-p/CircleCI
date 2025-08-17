@@ -44,10 +44,10 @@ jobs:
           name: Build the Package Manifest
           command: |
             source "$BASH_ENV"
-            cd CircleCI
+            cd force-app
             oldIFS="$IFS"
             IFS=$'\n'
-            FILES=$(git diff --name-only PROD-$CURRENT_REF HEAD | cut -b 9-)
+            FILES=$(git diff --name-only INTQA-$CURRENT_REF HEAD | cut -b 9-)
             if test -n "$FILES"; then
               sf project generate manifest -p $FILES
             else
@@ -55,6 +55,7 @@ jobs:
               exit 1
             fi
             IFS=$oldIFS
+
 
       # 🔹 Deploy changes only if package.xml exists
       - run:
