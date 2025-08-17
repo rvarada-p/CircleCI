@@ -46,7 +46,7 @@ jobs:
             source "$BASH_ENV"
             cd force-app
       
-            # Check if previous tag exists
+            # Determine diff range
             if git rev-parse "$CURRENT_TAG" >/dev/null 2>&1; then
               echo "Found previous tag: $CURRENT_TAG"
               FILES=$(git diff --name-only $CURRENT_TAG HEAD)
@@ -55,15 +55,17 @@ jobs:
               FILES=$(git diff --name-only $(git rev-list --max-parents=0 HEAD) HEAD)
             fi
       
+            echo "Changed files:"
+            echo "$FILES"
+      
             if test -n "$FILES"; then
+              # Pass full paths (no cut -b …) so sf can resolve them
               sf project generate manifest -p $FILES
             else
-              echo "No new commits to deploy."
-              exit 1
+              echo "✅ No new commits to deploy. Skipping deployment."
+              exit 0
             fi
-
-
-
+  
       # 🔹 Deploy changes only if package.xml exists
       - run:
           name: Push Source
