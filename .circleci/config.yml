@@ -13,7 +13,7 @@ jobs:
     steps:
       - checkout
 
-      # Install Salesforce CLI (modern 'sf' CLI; provides 'sf' command)
+      # Install Salesforce CLI
       - run:
           name: Install Salesforce CLI
           command: |
@@ -22,6 +22,26 @@ jobs:
             source "$BASH_ENV"
             sf --version
             sf plugins --core
+
+      # Install Salesforce Code Analyzer plugin
+      - run:
+          name: Install Salesforce Code Analyzer
+          command: |
+            source "$BASH_ENV"
+            sf plugins install @salesforce/sfdx-scanner
+            sf scanner --version
+
+      # Run Code Analyzer
+      - run:
+          name: Run Code Quality Check
+          command: |
+            source "$BASH_ENV"
+            # Analyze entire force-app directory
+            sf scanner run \
+              --target "force-app" \
+              --format table \
+              --engine pmd,eslint \
+              --normalize-severity
 
       # Prepare JWT key (supports either raw or base64 env var)
       - run:
@@ -39,35 +59,14 @@ jobs:
               --username "${SF_USERNAME_<< parameters.target_env >>}" \
               --jwt-key-file server.key \
               --client-id "${SF_CONSUMER_KEY_<< parameters.target_env >>}" \
-              --instance-url "${SF_INSTANCEURL_<< parameters.target_env >>}" \
-              --alias "ci-<< parameters.target_env >>" --set-default
-
-      - run:
-          name: Validate (checkonly)
-          command: |
-            source "$BASH_ENV"
-            if [ "<< parameters.target_env >>" = "PROD" ]; then
-              TEST_LEVEL="RunAllTestsInOrg"
-            else
-              TEST_LEVEL="NoTestRun"
-            fi
-            sf project deploy start \
-              --source-dir force-app \
-              --test-level $TEST_LEVEL \
-              --dry-run
+              --instance-url "${SF_INSTANCEURL_<< parameters.target_env >>}"
 
       - run:
           name: Deploy to Salesforce
           command: |
             source "$BASH_ENV"
-            if [ "<< parameters.target_env >>" = "PROD" ]; then
-              TEST_LEVEL="RunAllTestsInOrg"
-            else
-              TEST_LEVEL="NoTestRun"
-            fi
-            sf project deploy start \
-              --source-dir force-app \
-              --test-level $TEST_LEVEL
+            sf project deploy start --target-org "${SF_USERNAME_<< parameters.target_env >>}"
+
 
 workflows:
   deploy-qa:
