@@ -13,7 +13,7 @@ jobs:
     steps:
       - checkout
 
-      # Install Salesforce CLI  
+      # Install Salesforce CLI (modern 'sf' CLI; provides 'sf' command)
       - run:
           name: Install Salesforce CLI
           command: |
@@ -23,15 +23,7 @@ jobs:
             sf --version
             sf plugins --core
 
-      # Install sfdx-git-delta
-      - run:
-          name: Install sfdx-git-delta
-          command: |
-            npm install sfdx-git-delta --global
-            echo 'export PATH=$(npm bin -g):$PATH' >> "$BASH_ENV"
-            source "$BASH_ENV"
-
-      # Prepare JWT key
+      # Prepare JWT key (supports either raw or base64 env var)
       - run:
           name: Prepare JWT key
           command: |
@@ -39,7 +31,6 @@ jobs:
             chmod 600 server.key
             openssl rsa -in server.key -check -noout
 
-      # Authenticate to Salesforce
       - run:
           name: JWT Auth
           command: |
@@ -51,50 +42,31 @@ jobs:
               --instance-url "${SF_INSTANCEURL_<< parameters.target_env >>}" \
               --alias "ci-<< parameters.target_env >>" --set-default
 
-      # Generate delta (only for PROD tags)
-      - run:
-          name: Generate Delta
-          command: |
-            if [ "<< parameters.target_env >>" = "PROD" ]; then
-              git fetch --tags
-              export PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^)
-              export CURRENT_TAG=$(git describe --tags --abbrev=0)
-              echo "Deploying changes from $PREVIOUS_TAG to $CURRENT_TAG"
-
-              sgd --to "$CURRENT_TAG" --from "$PREVIOUS_TAG" --output .delta --source force-app
-            fi
-
-      # Validate Deployment
       - run:
           name: Validate (checkonly)
           command: |
             source "$BASH_ENV"
             if [ "<< parameters.target_env >>" = "PROD" ]; then
               TEST_LEVEL="RunAllTestsInOrg"
-              SRC_DIR=".delta"
             else
               TEST_LEVEL="NoTestRun"
-              SRC_DIR="force-app"
             fi
             sf project deploy start \
-              --source-dir $SRC_DIR \
+              --source-dir force-app \
               --test-level $TEST_LEVEL \
               --dry-run
 
-      # Deploy Changes
       - run:
           name: Deploy to Salesforce
           command: |
             source "$BASH_ENV"
             if [ "<< parameters.target_env >>" = "PROD" ]; then
               TEST_LEVEL="RunAllTestsInOrg"
-              SRC_DIR=".delta"
             else
               TEST_LEVEL="NoTestRun"
-              SRC_DIR="force-app"
             fi
             sf project deploy start \
-              --source-dir $SRC_DIR \
+              --source-dir force-app \
               --test-level $TEST_LEVEL
 
 workflows:
@@ -122,7 +94,5 @@ workflows:
           name: Deploy to Prod
           target_env: "PROD"
           filters:
-            tags:
-              only: /^v.*/
             branches:
-              ignore: /.*/
+              only: main
