@@ -42,7 +42,6 @@ jobs:
       - run:
           name: JWT Auth
           command: |
-            source "$BASH_ENV"
             sf org login jwt \
               --username "${SF_USERNAME_<< parameters.target_env >>}" \
               --jwt-key-file server.key \
@@ -50,6 +49,7 @@ jobs:
               --instance-url "${SF_INSTANCEURL_<< parameters.target_env >>}" \
               --alias targetOrg \
               --set-default
+
 
       # Find the Most Recent Tag for the given env
       - run:
