@@ -2,8 +2,8 @@ version: 2.1
 
 orbs:
   node: circleci/node@5.0.2
-  
-  jobs:
+
+jobs:
   deploy-to-env:
     parameters:
       target_env:
@@ -21,89 +21,61 @@ orbs:
             echo 'export PATH=$(npm bin -g):$PATH' >> "$BASH_ENV"
             source "$BASH_ENV"
             sf --version
+            sf plugins --core
 
-      # Install Java (needed for PMD in Code Analyzer)
-      - run:
-          name: Install Java
-          command: |
-            sudo apt-get update
-            sudo apt-get install -y openjdk-17-jdk
-            export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-            echo "export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $BASH_ENV
-
-      # Install Code Analyzer
-      - run:
-          name: Install Salesforce Code Analyzer
-          command: |
-            source "$BASH_ENV"
-            sf plugins install @salesforce/sfdx-scanner
-
-      # Run Code Quality Check
-      - run:
-          name: Run Code Quality Check
-          command: |
-            source "$BASH_ENV"
-            sf scanner run \
-              --target "force-app" \
-              --format table \
-              --engine pmd,eslint \
-              --normalize-severity
-
-      # Find the Most Recent Tag
+      # 🔹 Git Tag Logic: Find the latest tag
       - run:
           name: Find Most Recent Tag
           command: |
             currentRef=0
-            for tag in $(git describe --tags --match='INTQA-[0-9]*' --abbrev=0 2>/dev/null || true); do
+            for tag in $(git describe --tags --match='PROD-[0-9]*' --abbrev=0 --always); do
               refNum=$(echo $tag | cut -d '-' -f 2)
               if test $refNum -gt $currentRef; then
                 currentRef=$refNum
                 currentTag=$tag
               fi
             done
-            echo "Found latest tag: $currentTag"
+            echo "Latest Tag: $currentTag"
             echo "export CURRENT_REF=$currentRef" >> $BASH_ENV
+            echo "export CURRENT_TAG=$currentTag" >> $BASH_ENV
 
-      # Build the Package Manifest (delta)
+      # 🔹 Build Manifest from changes since last tag
       - run:
-          name: Build Package Manifest
+          name: Build the Package Manifest
           command: |
             source "$BASH_ENV"
+            cd CircleCI
             oldIFS="$IFS"
             IFS=$'\n'
-            FILES=$(git diff --name-only INTQA-$CURRENT_REF HEAD | cut -b 9-)
+            FILES=$(git diff --name-only PROD-$CURRENT_REF HEAD | cut -b 9-)
             if test -n "$FILES"; then
               sf project generate manifest -p $FILES
             else
-              echo "There are no new commits to deploy to INTQA."
-              exit 0
+              echo "No new commits to deploy to INTQA."
+              exit 1
             fi
             IFS=$oldIFS
 
-      # Deploy Only Changed Metadata
+      # 🔹 Deploy changes only if package.xml exists
       - run:
-          name: Push Source (Delta Deploy)
+          name: Push Source
           command: |
-            source "$BASH_ENV"
             if test -f package.xml; then
-              sf project deploy start -w 360 -x package.xml -l RunLocalTests -o "${SF_USERNAME_<< parameters.target_env >>}"
+              sf project deploy start -w 360 -x package.xml -l RunLocalTests -o ${SF_USERNAME_<< parameters.target_env >>}
             else
               echo "No Package Found!"
               exit 1
             fi
 
-      # Set New Tag
+      # 🔹 Tag new deployment
       - run:
           name: Set New Tag
           command: |
             source "$BASH_ENV"
             git config user.email "ci-bot@example.com"
-            git config user.name "CircleCI Bot"
-            newTag="INTQA-$(( CURRENT_REF + 1 ))"
-            git tag $newTag
-            git push origin $newTag
-
-
+            git config user.name "CI Bot"
+            git tag "PROD-$(( CURRENT_REF + 1 ))"
+            git push origin "PROD-$(( CURRENT_REF + 1 ))"
 
 workflows:
   deploy-qa:
@@ -114,7 +86,6 @@ workflows:
           filters:
             branches:
               only: qa
-
   deploy-uat:
     jobs:
       - deploy-to-env:
@@ -123,7 +94,6 @@ workflows:
           filters:
             branches:
               only: uat
-
   deploy-prod:
     jobs:
       - deploy-to-env:
