@@ -1,8 +1,3 @@
-version: 2.1
-
-orbs:
-  node: circleci/node@5.0.2
-
 jobs:
   deploy-to-env:
     parameters:
@@ -21,26 +16,24 @@ jobs:
             echo 'export PATH=$(npm bin -g):$PATH' >> "$BASH_ENV"
             source "$BASH_ENV"
             sf --version
-            sf plugins --core
 
-
+      # Install Java (needed for PMD in Code Analyzer)
       - run:
-          name: Install Java (required for PMD)
+          name: Install Java
           command: |
             sudo apt-get update
             sudo apt-get install -y openjdk-17-jdk
-            java -version
             export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
             echo "export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $BASH_ENV
 
+      # Install Code Analyzer
       - run:
           name: Install Salesforce Code Analyzer
           command: |
             source "$BASH_ENV"
             sf plugins install @salesforce/sfdx-scanner
-            # verify plugin is installed
-            sf plugins
-      
+
+      # Run Code Quality Check
       - run:
           name: Run Code Quality Check
           command: |
@@ -50,30 +43,61 @@ jobs:
               --format table \
               --engine pmd,eslint \
               --normalize-severity
-        
-      # Prepare JWT key (supports either raw or base64 env var)
-      - run:
-          name: Prepare JWT key
-          command: |
-            echo "$JWT_KEY_B64" | base64 -d > server.key
-            chmod 600 server.key
-            openssl rsa -in server.key -check -noout
 
+      # Find the Most Recent Tag
       - run:
-          name: JWT Auth
+          name: Find Most Recent Tag
+          command: |
+            currentRef=0
+            for tag in $(git describe --tags --match='INTQA-[0-9]*' --abbrev=0 2>/dev/null || true); do
+              refNum=$(echo $tag | cut -d '-' -f 2)
+              if test $refNum -gt $currentRef; then
+                currentRef=$refNum
+                currentTag=$tag
+              fi
+            done
+            echo "Found latest tag: $currentTag"
+            echo "export CURRENT_REF=$currentRef" >> $BASH_ENV
+
+      # Build the Package Manifest (delta)
+      - run:
+          name: Build Package Manifest
           command: |
             source "$BASH_ENV"
-            sf org login jwt \
-              --username "${SF_USERNAME_<< parameters.target_env >>}" \
-              --jwt-key-file server.key \
-              --client-id "${SF_CONSUMER_KEY_<< parameters.target_env >>}" \
-              --instance-url "${SF_INSTANCEURL_<< parameters.target_env >>}"
+            oldIFS="$IFS"
+            IFS=$'\n'
+            FILES=$(git diff --name-only INTQA-$CURRENT_REF HEAD | cut -b 9-)
+            if test -n "$FILES"; then
+              sf project generate manifest -p $FILES
+            else
+              echo "There are no new commits to deploy to INTQA."
+              exit 0
+            fi
+            IFS=$oldIFS
 
+      # Deploy Only Changed Metadata
       - run:
-          name: Deploy to Salesforce
+          name: Push Source (Delta Deploy)
           command: |
             source "$BASH_ENV"
-            sf project deploy start --target-org "${SF_USERNAME_<< parameters.target_env >>}"
+            if test -f package.xml; then
+              sf project deploy start -w 360 -x package.xml -l RunLocalTests -o "${SF_USERNAME_<< parameters.target_env >>}"
+            else
+              echo "No Package Found!"
+              exit 1
+            fi
+
+      # Set New Tag
+      - run:
+          name: Set New Tag
+          command: |
+            source "$BASH_ENV"
+            git config user.email "ci-bot@example.com"
+            git config user.name "CircleCI Bot"
+            newTag="INTQA-$(( CURRENT_REF + 1 ))"
+            git tag $newTag
+            git push origin $newTag
+
 
 
 workflows:
