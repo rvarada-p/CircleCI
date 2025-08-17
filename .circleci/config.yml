@@ -45,16 +45,23 @@ jobs:
           command: |
             source "$BASH_ENV"
             cd force-app
-            oldIFS="$IFS"
-            IFS=$'\n'
-            FILES=$(git diff --name-only PROD-$CURRENT_REF HEAD | cut -b 9-)
+      
+            # Check if previous tag exists
+            if git rev-parse "$CURRENT_TAG" >/dev/null 2>&1; then
+              echo "Found previous tag: $CURRENT_TAG"
+              FILES=$(git diff --name-only $CURRENT_TAG HEAD)
+            else
+              echo "No previous tag found. Using initial commit."
+              FILES=$(git diff --name-only $(git rev-list --max-parents=0 HEAD) HEAD)
+            fi
+      
             if test -n "$FILES"; then
               sf project generate manifest -p $FILES
             else
-              echo "No new commits to deploy to INTQA."
+              echo "No new commits to deploy."
               exit 1
             fi
-            IFS=$oldIFS
+
 
 
       # 🔹 Deploy changes only if package.xml exists
