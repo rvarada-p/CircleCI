@@ -13,17 +13,22 @@ jobs:
     steps:
       - checkout
 
-      # Install Salesforce CLI (modern 'sf' CLI; provides 'sf' command)
+      # Install NPM
+      - run:
+          name: Install NPM
+          command: npm install -g latest
+
+      # Install Salesforce CLI
       - run:
           name: Install Salesforce CLI
-          command: |
-            sudo npm install -g @salesforce/cli
-            echo 'export PATH=$(npm bin -g):$PATH' >> "$BASH_ENV"
-            source "$BASH_ENV"
-            sf --version
-            sf plugins --core
+          command: npm install @salesforce/cli --global
 
-      # Prepare JWT key (supports either raw or base64 env var)
+      # Ensure SF CLI is updated
+      - run:
+          name: Update Salesforce CLI
+          command: npm update --global @salesforce/cli
+
+      # Prepare JWT key
       - run:
           name: Prepare JWT key
           command: |
@@ -31,6 +36,7 @@ jobs:
             chmod 600 server.key
             openssl rsa -in server.key -check -noout
 
+      # JWT Auth (old logic retained)
       - run:
           name: JWT Auth
           command: |
@@ -40,34 +46,73 @@ jobs:
               --jwt-key-file server.key \
               --client-id "${SF_CONSUMER_KEY_<< parameters.target_env >>}" \
               --instance-url "${SF_INSTANCEURL_<< parameters.target_env >>}" \
-              --alias "ci-<< parameters.target_env >>" --set-default
+              --alias targetOrg \
+              --set-default
 
+      # Find the Most Recent Tag for the given env
       - run:
-          name: Validate (checkonly)
+          name: Find Most Recent Tag
           command: |
-            source "$BASH_ENV"
-            if [ "<< parameters.target_env >>" = "PROD" ]; then
-              TEST_LEVEL="RunAllTestsInOrg"
-            else
-              TEST_LEVEL="NoTestRun"
+            prefix="INT${CIRCLE_JOB^^}-${CIRCLE_BRANCH^^}"
+            # Default per env (QA/UAT/PROD)
+            if [ "<< parameters.target_env >>" = "QA" ]; then
+              prefix="INTQA"
+            elif [ "<< parameters.target_env >>" = "UAT" ]; then
+              prefix="INTUAT"
+            elif [ "<< parameters.target_env >>" = "PROD" ]; then
+              prefix="INTPROD"
             fi
-            sf project deploy start \
-              --source-dir force-app \
-              --test-level $TEST_LEVEL \
-              --dry-run
 
+            currentRef=0
+            for tag in $(git describe --tags --match="${prefix}-[0-9]*"); do
+              refNum=$(echo $tag | cut -d '-' -f 2)
+              if test $refNum -gt $currentRef; then
+                  currentRef=$refNum
+                  currentTag=$tag
+              fi
+            done
+
+            echo "TAG_PREFIX=$prefix" >> $BASH_ENV
+            echo "CURRENT_REF=$currentRef" >> $BASH_ENV
+            source $BASH_ENV
+            echo "Latest tag for $prefix: $currentTag ($currentRef)"
+
+      # Build the Package Manifest
       - run:
-          name: Deploy to Salesforce
+          name: Build the Package Manifest
           command: |
-            source "$BASH_ENV"
-            if [ "<< parameters.target_env >>" = "PROD" ]; then
-              TEST_LEVEL="RunAllTestsInOrg"
-            else
-              TEST_LEVEL="NoTestRun"
+            source $BASH_ENV
+            cd Bedrock/Bedrock
+            oldIFS="$IFS"
+            IFS=$'\n'
+            FILES=$(git diff --name-only ${TAG_PREFIX}-${CURRENT_REF} HEAD | cut -b 9-)
+            if test -n "$FILES"; then
+                sf project generate manifest -p $FILES
+            else 
+                echo "There are no new commits to deploy to ${TAG_PREFIX}."
+                exit 1
             fi
-            sf project deploy start \
-              --source-dir force-app \
-              --test-level $TEST_LEVEL
+
+      # Deploy using package.xml
+      - run:
+          name: Push source
+          command: |
+            if test -f package.xml; then
+              sf project deploy start -w 360 -x package.xml -l RunLocalTests -o targetOrg 
+            else 
+              echo "No Package Found!"
+              exit 1
+            fi
+            IFS=$oldIFS
+
+      # Set New Tag after successful deploy
+      - run:
+          name: Set New Tag
+          command: |
+            source $BASH_ENV
+            newTag="${TAG_PREFIX}-$(( CURRENT_REF + 1 ))"
+            git tag "$newTag"
+            echo "Created new tag: $newTag"
 
 workflows:
   deploy-qa:
