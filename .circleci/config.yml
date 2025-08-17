@@ -31,18 +31,16 @@ jobs:
             # verify plugin is installed
             sf plugins
       
-        - run:
-            name: Run Code Quality Check
-            command: |
-              source "$BASH_ENV"
-              sf scanner run \
-                --target "force-app" \
-                --format table \
-                --engine pmd,eslint \
-                --normalize-severity
+      - run:
+          name: Run Code Quality Check
+          command: |
+            source "$BASH_ENV"
+            sf scanner run \
+              --target "force-app" \
+              --format table \
+              --engine pmd,eslint \
+              --normalize-severity
         
-
-
       # Prepare JWT key (supports either raw or base64 env var)
       - run:
           name: Prepare JWT key
