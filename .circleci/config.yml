@@ -21,15 +21,14 @@ jobs:
             export PATH=$(pwd)/node_modules/.bin:$PATH
 
 
-      # Install Salesforce CLI
       - run:
           name: Install Salesforce CLI
-          command: npm install @salesforce/cli --global
-
-      # Ensure SF CLI is updated
+          command: sudo npm install -g @salesforce/cli
+      
       - run:
           name: Update Salesforce CLI
-          command: npm update --global @salesforce/cli
+          command: sudo npm update -g @salesforce/cli
+
 
       # Prepare JWT key
       - run:
