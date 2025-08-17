@@ -23,6 +23,16 @@ jobs:
             sf --version
             sf plugins --core
 
+
+      - run:
+          name: Install Java (required for PMD)
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y openjdk-17-jdk
+            java -version
+            export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+            echo "export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $BASH_ENV
+
       - run:
           name: Install Salesforce Code Analyzer
           command: |
