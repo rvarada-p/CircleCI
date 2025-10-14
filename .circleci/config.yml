@@ -1,102 +1,105 @@
 version: 2.1
 
-# ------------------------------------------------------------
-# PARAMETERS
-# ------------------------------------------------------------
-parameters:
-  sf_env:
-    type: string
-    default: "PROD"
-  sf_login_url:
-    type: string
-    default: "https://login.salesforce.com"
-  sf_consumer_key:
-    type: env_var_name
-    default: "SF_CONSUMER_KEY"
-  sf_username:
-    type: env_var_name
-    default: "SF_USERNAME"
-  sf_jwt_key:
-    type: env_var_name
-    default: "SF_JWT_KEY"
+orbs:
+  node: circleci/node@5.0.2
 
-# ------------------------------------------------------------
-# JOBS
-# ------------------------------------------------------------
 jobs:
-  # ---------- 1. Run Apex Tests ----------
-  run_apex_tests:
+  deploy-to-env:
+    parameters:
+      target_env:
+        type: string
     docker:
-      - image: cimg/node:20.5
+      - image: cimg/node:18.17
     steps:
       - checkout
-      - run: npm install sfdx-cli --global
-      - run:
-          name: Authenticate to Salesforce
-          command: |
-            echo "$SF_JWT_KEY" > server.key
-            sfdx auth:jwt:grant \
-              --client-id $SF_CONSUMER_KEY \
-              --jwt-key-file server.key \
-              --username $SF_USERNAME \
-              --instance-url $SF_LOGIN_URL \
-              --set-default-dev-hub
-      - run:
-          name: Run Apex Tests
-          command: |
-            mkdir -p test-results
-            sfdx force:apex:test:run \
-              --resultformat junit \
-              --codecoverage \
-              --outputdir test-results \
-              --wait 30
-      - store_test_results:
-          path: test-results
-      - store_artifacts:
-          path: test-results
 
-  # ---------- 2. Deploy Metadata ----------
-  deploy_salesforce:
-    docker:
-      - image: cimg/node:20.5
-    steps:
-      - checkout
-      - run: npm install sfdx-cli --global
+      # Install Salesforce CLI
       - run:
-          name: Authenticate to Salesforce
+          name: Install Salesforce CLI
           command: |
-            echo "$SF_JWT_KEY" > server.key
-            sfdx auth:jwt:grant \
-              --client-id $SF_CONSUMER_KEY \
-              --jwt-key-file server.key \
-              --username $SF_USERNAME \
-              --instance-url $SF_LOGIN_URL
-      - run:
-          name: Deploy Latest Metadata
-          command: |
-            echo "Deploying latest metadata to Salesforce..."
-            sfdx force:source:deploy -x manifest/package.xml -w 60 --verbose
-      - run:
-          name: Confirm Deployment Success
-          command: |
-            echo "Deployment completed successfully."
+            sudo npm install -g @salesforce/cli
+            echo 'export PATH=$(npm bin -g):$PATH' >> "$BASH_ENV"
+            source "$BASH_ENV"
+            sf --version
+            sf plugins --core
 
-# ------------------------------------------------------------
-# WORKFLOWS
-# ------------------------------------------------------------
+
+      - run:
+          name: Install Java (required for PMD)
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y openjdk-17-jdk
+            java -version
+            export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+            echo "export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $BASH_ENV
+
+      - run:
+          name: Install Salesforce Code Analyzer
+          command: |
+            source "$BASH_ENV"
+            sf plugins install @salesforce/sfdx-scanner
+            # verify plugin is installed
+            sf plugins
+      
+      - run:
+          name: Run Code Quality Check
+          command: |
+            source "$BASH_ENV"
+            sf scanner run \
+              --target "force-app" \
+              --format table \
+              --engine pmd,eslint \
+              --normalize-severity
+        
+      # Prepare JWT key (supports either raw or base64 env var)
+      - run:
+          name: Prepare JWT key
+          command: |
+            echo "$JWT_KEY_B64" | base64 -d > server.key
+            chmod 600 server.key
+            openssl rsa -in server.key -check -noout
+
+      - run:
+          name: JWT Auth
+          command: |
+            source "$BASH_ENV"
+            sf org login jwt \
+              --username "${SF_USERNAME_<< parameters.target_env >>}" \
+              --jwt-key-file server.key \
+              --client-id "${SF_CONSUMER_KEY_<< parameters.target_env >>}" \
+              --instance-url "${SF_INSTANCEURL_<< parameters.target_env >>}"
+
+      - run:
+          name: Deploy to Salesforce
+          command: |
+            source "$BASH_ENV"
+            sf project deploy start --target-org "${SF_USERNAME_<< parameters.target_env >>}"
+
+
 workflows:
-  deploy-on-merge:
+  deploy-qa:
     jobs:
-      - run_apex_tests:
-          context: salesforce-context
-      - deploy_salesforce:
-          requires:
-            - run_apex_tests
-          context: salesforce-context
-          concurrency:
-            group: "salesforce-deploy-main"
-            cancel_in_progress: true
+      - deploy-to-env:
+          name: Deploy to QA
+          target_env: "QA"
           filters:
             branches:
-              only:
-                - main
+              only: qa
+
+  deploy-uat:
+    jobs:
+      - deploy-to-env:
+          name: Deploy to UAT
+          target_env: "UAT"
+          filters:
+            branches:
+              only: uat
+
+  deploy-prod:
+    jobs:
+      - deploy-to-env:
+          name: Deploy to Prod
+          target_env: "PROD"
+          filters:
+            branches:
+              only: main
