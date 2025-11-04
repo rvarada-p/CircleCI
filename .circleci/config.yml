@@ -53,11 +53,10 @@ jobs:
         
       # Prepare JWT key (supports either raw or base64 env var)
       - run:
-          name: Prepare JWT key
+          name: Decode JWT key for << parameters.target_env >>
           command: |
-            echo "$JWT_KEY_B64" | base64 -d > server.key
+            echo "${JWT_KEY_<< parameters.target_env >>}" | base64 -d > server.key
             chmod 600 server.key
-            openssl rsa -in server.key -check -noout
 
       - run:
           name: JWT Auth
